@@ -12,7 +12,7 @@ public static class DiagnosticAnalyzer
         {
             recommendations.Add(new Recommendation(
                 "CPU com uso elevado",
-                "O uso da CPU chegou a 85% ou mais nesta amostra. Compare os processos durante o jogo para investigar a carga; isso, sozinho, não comprova um gargalo.",
+                "O uso da CPU chegou a 85% ou mais nesta amostra. Observe os processos ao reproduzir a lentidão para investigar a carga; isso, sozinho, não comprova um gargalo.",
                 RecommendationSeverity.Attention));
         }
 
@@ -20,7 +20,7 @@ public static class DiagnosticAnalyzer
         {
             recommendations.Add(new Recommendation(
                 "Memória com uso elevado",
-                "85% ou mais da memória física está em uso. Revise os aplicativos abertos e compare a estabilidade do jogo antes e depois de uma mudança.",
+                "85% ou mais da memória física está em uso. Revise os aplicativos abertos e compare o tempo de resposta do PC antes e depois de uma mudança.",
                 RecommendationSeverity.Attention));
         }
 
@@ -34,7 +34,7 @@ public static class DiagnosticAnalyzer
         {
             recommendations.Add(new Recommendation(
                 "Processo para investigar",
-                $"{leadingProcess.Name} (PID {leadingProcess.Id}) usou {Formatters.Percent(leadingProcess.CpuPercent)} da capacidade total de CPU no intervalo. Verifique se é o próprio jogo ou um aplicativo necessário antes de tomar qualquer ação.",
+                $"{leadingProcess.Name} (PID {leadingProcess.Id}) usou {Formatters.Percent(leadingProcess.CpuPercent)} da capacidade total de CPU no intervalo. Verifique se é um aplicativo que você está usando ou um componente necessário antes de tomar qualquer ação.",
                 RecommendationSeverity.Information));
         }
 
@@ -49,13 +49,13 @@ public static class DiagnosticAnalyzer
         {
             recommendations.Add(new Recommendation(
                 "Sem pressão alta nesta amostra",
-                "CPU e memória estão abaixo de 85% de uso. Observe o painel durante o jogo: uma amostra isolada não descarta travamentos nem identifica todos os gargalos.",
+                "CPU e memória estão abaixo de 85% de uso. Observe o painel enquanto executa suas tarefas: uma amostra isolada não descarta travamentos nem identifica todos os gargalos.",
                 RecommendationSeverity.Information));
         }
 
         recommendations.Add(new Recommendation(
-            "Compare durante o jogo",
-            "Este painel mostra recursos do sistema; ele não mede FPS nem input lag. Para comparar mudanças, use o mesmo jogo, cenário e configurações, com uma ferramenta de captura de tempos de quadro.",
+            "Compare na mesma tarefa",
+            "Para comparar mudanças, repita a mesma tarefa nas mesmas condições e observe o tempo de resposta do PC. Uma redução no consumo de CPU ou memória, por si só, não comprova melhoria de desempenho.",
             RecommendationSeverity.Information));
 
         return recommendations.AsReadOnly();

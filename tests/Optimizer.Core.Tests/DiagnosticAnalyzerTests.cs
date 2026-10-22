@@ -36,7 +36,7 @@ public sealed class DiagnosticAnalyzerTests
 
         Assert.Contains("mais CPU (PID 3)", processRecommendation.Description);
         Assert.Contains("35,0%", processRecommendation.Description);
-        Assert.Contains("próprio jogo", processRecommendation.Description);
+        Assert.Contains("componente necessário", processRecommendation.Description);
     }
 
     [Theory]
@@ -51,12 +51,13 @@ public sealed class DiagnosticAnalyzerTests
     }
 
     [Fact]
-    public void NormalSampleDoesNotClaimToMeasureFpsOrLatency()
+    public void NormalSampleEncouragesComparableTasksWithoutPromisingPerformanceGains()
     {
         var recommendations = DiagnosticAnalyzer.Analyze(Snapshot());
 
         Assert.Contains(recommendations, item => item.Title == "Sem pressão alta nesta amostra");
-        Assert.Contains(recommendations, item => item.Description.Contains("não mede FPS nem input lag"));
+        Assert.Contains(recommendations, item => item.Title == "Compare na mesma tarefa");
+        Assert.Contains(recommendations, item => item.Description.Contains("não comprova melhoria de desempenho"));
         Assert.All(recommendations, item => Assert.Equal(RecommendationSeverity.Information, item.Severity));
     }
 

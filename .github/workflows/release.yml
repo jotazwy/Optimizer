@@ -5,7 +5,7 @@ on:
     branches:
       - codex/optimizer-gaming-preview
     tags:
-      - v0.1.0-preview
+      - v0.2.0-preview
     paths:
       - .github/workflows/release.yml
   workflow_dispatch:
@@ -14,11 +14,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: optimizer-release-v0.1.0-preview
+  group: optimizer-release-v0.2.0-preview
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: v0.1.0-preview
+  RELEASE_TAG: v0.2.0-preview
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   DOTNET_NOLOGO: '1'
 
@@ -51,13 +51,24 @@ jobs:
           --configuration Release --runtime win-x64 --self-contained true
           -p:PublishSingleFile=false -p:PublishTrimmed=false
           -p:NuGetLockFilePath=obj/packages.win-x64.lock.json
-          -p:Version=0.1.0 -p:InformationalVersion=0.1.0-preview
+          -p:Version=0.2.0 -p:InformationalVersion=0.2.0-preview
           --output artifacts/Optimizer-windows-x64
       - name: Open the real window and verify live diagnostic values
         shell: powershell
         run: |
           Add-Type -AssemblyName UIAutomationClient
           Add-Type -AssemblyName UIAutomationTypes
+          Add-Type -AssemblyName System.Drawing
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class PreviewWindow {
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool SetForegroundWindow(IntPtr handle);
+          }
+          '@
           $exe = Join-Path $env:GITHUB_WORKSPACE 'artifacts/Optimizer-windows-x64/Optimizer.App.exe'
           $app = Start-Process -FilePath $exe -PassThru
           try {
@@ -103,9 +114,60 @@ jobs:
             if (-not $ready) { throw 'The live diagnostic window did not become ready within 40 seconds.' }
             $pattern = [System.Windows.Automation.WindowPattern]$window.GetCurrentPattern(
               [System.Windows.Automation.WindowPattern]::Pattern)
+            # Invoke the real refresh button after the displayed timestamp can advance.
+            $beforeRefresh = $status.Current.Name
+            Start-Sleep -Milliseconds 1200
+            $refreshDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            while (-not $refresh.Current.IsEnabled -and [DateTime]::UtcNow -lt $refreshDeadline) {
+              Start-Sleep -Milliseconds 100
+            }
+            if (-not $refresh.Current.IsEnabled) { throw 'Manual refresh remained disabled.' }
+            $invoke = [System.Windows.Automation.InvokePattern]$refresh.GetCurrentPattern(
+              [System.Windows.Automation.InvokePattern]::Pattern)
+            $invoke.Invoke()
+            while ($status.Current.Name -eq $beforeRefresh -and [DateTime]::UtcNow -lt $refreshDeadline) {
+              Start-Sleep -Milliseconds 200
+            }
+            if ($status.Current.Name -eq $beforeRefresh) { throw 'Diagnostic values did not refresh.' }
+
+            if ($pattern.Current.CanMaximize) {
+              $pattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+              Start-Sleep -Milliseconds 400
+              if ($pattern.Current.WindowVisualState -ne [System.Windows.Automation.WindowVisualState]::Maximized) {
+                throw 'The window did not maximize.'
+              }
+              $pattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+            }
+            $app.Refresh()
+            [void][PreviewWindow]::SetForegroundWindow($app.MainWindowHandle)
+            Start-Sleep -Milliseconds 1000
+            $bounds = $window.Current.BoundingRectangle
+            $windowRectangle = [System.Drawing.Rectangle]::new(
+              [int][Math]::Floor($bounds.X), [int][Math]::Floor($bounds.Y),
+              [int][Math]::Ceiling($bounds.Width), [int][Math]::Ceiling($bounds.Height))
+            $captureRectangle = [System.Drawing.Rectangle]::Intersect(
+              $windowRectangle, [System.Windows.Forms.SystemInformation]::VirtualScreen)
+            if ($captureRectangle.Width -le 0 -or $captureRectangle.Height -le 0) {
+              throw 'The diagnostic window has no visible capture area.'
+            }
+            $bitmap = [System.Drawing.Bitmap]::new($captureRectangle.Width, $captureRectangle.Height)
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            try {
+              $graphics.CopyFromScreen($captureRectangle.Location, [System.Drawing.Point]::Empty, $captureRectangle.Size)
+              $image = Join-Path $env:GITHUB_WORKSPACE 'artifacts/Optimizer-preview.png'
+              $bitmap.Save($image, [System.Drawing.Imaging.ImageFormat]::Png)
+            }
+            finally {
+              $graphics.Dispose()
+              $bitmap.Dispose()
+            }
             $pattern.Close()
             if (-not $app.WaitForExit(10000)) { throw 'Optimizer did not exit after closing its window.' }
             if ($app.ExitCode -ne 0) { throw "Optimizer exited with code $($app.ExitCode)." }
+          }
+          catch {
+            Write-Output "::error title=Windows UI validation::$($_.Exception.Message)"
+            throw
           }
           finally {
             $app.Refresh()
@@ -134,7 +196,7 @@ jobs:
             throw 'The portable package must include both the .NET and Windows Desktop runtimes.'
           }
           @'
-          OPTIMIZER - VERSAO INICIAL DE DIAGNOSTICO
+          OPTIMIZER 0.2.0-PREVIEW - DIAGNOSTICO DO PC
 
           Windows 10 atualizado ou Windows 11, processador x64 (Intel/AMD).
 
@@ -148,11 +210,14 @@ jobs:
           Aguarde alguns segundos para as primeiras leituras de CPU e memoria.
           Para sair, feche a janela. Nao exige administrador nem altera o PC.
 
-          Esta versao mostra hardware, CPU, memoria e processos. Ainda nao
-          aplica otimizacoes e nao mede FPS, 1% low ou input lag.
+          Esta versao renova a identidade visual com preto profundo,
+          paineis com aparencia de vidro e acentos frios discretos.
+          O foco e o diagnostico geral do PC: hardware, CPU, memoria e processos.
+          Ainda nao executa limpezas nem altera configuracoes do Windows.
           Os testes de contadores reais passaram no Windows antes da publicacao.
-          A janela abriu, mostrou CPU e memoria e encerrou no teste automatico.
-          A aparencia visual e o comportamento durante jogos ainda precisam de validacao.
+          A janela abriu, mostrou CPU e memoria, atualizou e encerrou no teste automatico.
+          Uma captura real da janela acompanha os arquivos da versao no GitHub.
+          O resultado durante o uso diario ainda deve ser avaliado no seu PC.
           '@ | Set-Content (Join-Path $publish 'LEIA-ME.txt') -Encoding utf8
           Get-ChildItem $publish -Filter '*.pdb' -Recurse | Remove-Item
           $archive = Join-Path $env:GITHUB_WORKSPACE 'artifacts/Optimizer-windows-x64.zip'
@@ -167,7 +232,8 @@ jobs:
           path: |
             artifacts/Optimizer-windows-x64.zip
             artifacts/Optimizer-windows-x64.zip.sha256
-            docs/RELEASE-NOTES-0.1.0-preview.md
+            artifacts/Optimizer-preview.png
+            docs/RELEASE-NOTES-0.2.0-preview.md
 
   release:
     name: Publish GitHub prerelease
@@ -190,7 +256,8 @@ jobs:
           gh release create "$RELEASE_TAG" \
             --verify-tag \
             --prerelease \
-            --title 'Optimizer 0.1.0-preview' \
-            --notes-file release-assets/docs/RELEASE-NOTES-0.1.0-preview.md \
+            --title 'Optimizer 0.2.0-preview' \
+            --notes-file release-assets/docs/RELEASE-NOTES-0.2.0-preview.md \
             release-assets/artifacts/Optimizer-windows-x64.zip \
-            release-assets/artifacts/Optimizer-windows-x64.zip.sha256
+            release-assets/artifacts/Optimizer-windows-x64.zip.sha256 \
+            release-assets/artifacts/Optimizer-preview.png
