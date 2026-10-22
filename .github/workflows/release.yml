@@ -2,8 +2,12 @@ name: Publish Windows preview
 
 on:
   push:
+    branches:
+      - codex/optimizer-gaming-preview
     tags:
       - v0.1.0-preview
+    paths:
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
