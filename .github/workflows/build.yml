@@ -1,0 +1,35 @@
+name: Build and tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - name: Restore locked dependencies
+        run: dotnet restore Optimizer.sln --locked-mode
+      - name: Build
+        run: dotnet build Optimizer.sln --configuration Release --no-restore
+      - name: Test diagnostic rules
+        run: dotnet test tests/Optimizer.Core.Tests --configuration Release --no-build --no-restore
+      - name: Test Windows counters
+        if: runner.os == 'Windows'
+        run: dotnet test tests/Optimizer.Windows.Tests --configuration Release --no-build --no-restore

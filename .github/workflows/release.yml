@@ -1,0 +1,192 @@
+name: Publish Windows preview
+
+on:
+  push:
+    tags:
+      - v0.1.0-preview
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: optimizer-release-v0.1.0-preview
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: v0.1.0-preview
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  package:
+    name: Test and package Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - name: Restore locked dependencies
+        run: dotnet restore Optimizer.sln --locked-mode
+      - name: Build
+        run: dotnet build Optimizer.sln --configuration Release --no-restore
+      - name: Test diagnostic rules
+        run: dotnet test tests/Optimizer.Core.Tests --configuration Release --no-build --no-restore
+      - name: Test real Windows counters
+        run: dotnet test tests/Optimizer.Windows.Tests --configuration Release --no-build --no-restore
+      - name: Publish with the Windows runtime included
+        run: >-
+          dotnet publish src/Optimizer.App/Optimizer.App.csproj
+          --configuration Release --runtime win-x64 --self-contained true
+          -p:PublishSingleFile=false -p:PublishTrimmed=false
+          -p:NuGetLockFilePath=obj/packages.win-x64.lock.json
+          -p:Version=0.1.0 -p:InformationalVersion=0.1.0-preview
+          --output artifacts/Optimizer-windows-x64
+      - name: Open the real window and verify live diagnostic values
+        shell: powershell
+        run: |
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'artifacts/Optimizer-windows-x64/Optimizer.App.exe'
+          $app = Start-Process -FilePath $exe -PassThru
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(40)
+            $processCondition = [System.Windows.Automation.PropertyCondition]::new(
+              [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$app.Id)
+            $window = $null
+            $ready = $false
+            $prefix = 'Atualizado ' + [char]0x00E0 + 's'
+            while ([DateTime]::UtcNow -lt $deadline) {
+              $app.Refresh()
+              if ($app.HasExited) { throw "Optimizer exited before becoming ready; code $($app.ExitCode)." }
+              try {
+                $window = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+                  [System.Windows.Automation.TreeScope]::Children, $processCondition)
+                if ($null -ne $window) {
+                  $statusCondition = [System.Windows.Automation.PropertyCondition]::new(
+                    [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'DiagnosticStatus')
+                  $status = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $statusCondition)
+                  if ($null -ne $status -and $status.Current.Name.StartsWith($prefix)) {
+                    foreach ($id in @('CpuValue', 'MemoryValue')) {
+                      $condition = [System.Windows.Automation.PropertyCondition]::new(
+                        [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+                      $metric = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+                      if ($null -eq $metric -or $metric.Current.Name -notmatch '^[0-9]+,[0-9]%$') {
+                        throw "Diagnostic metric $id was not populated with a percentage."
+                      }
+                    }
+                    $refreshCondition = [System.Windows.Automation.PropertyCondition]::new(
+                      [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'RefreshButton')
+                    $refresh = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $refreshCondition)
+                    if ($null -eq $refresh) { throw 'The manual refresh control was not found.' }
+                    $ready = $true
+                    break
+                  }
+                }
+              }
+              catch [System.Windows.Automation.ElementNotAvailableException] {
+                # A provider may be replaced while the window is loading; retry.
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ready) { throw 'The live diagnostic window did not become ready within 40 seconds.' }
+            $pattern = [System.Windows.Automation.WindowPattern]$window.GetCurrentPattern(
+              [System.Windows.Automation.WindowPattern]::Pattern)
+            $pattern.Close()
+            if (-not $app.WaitForExit(10000)) { throw 'Optimizer did not exit after closing its window.' }
+            if ($app.ExitCode -ne 0) { throw "Optimizer exited with code $($app.ExitCode)." }
+          }
+          finally {
+            $app.Refresh()
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
+            $app.Dispose()
+          }
+      - name: Check files and create portable ZIP
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:GITHUB_WORKSPACE 'artifacts/Optimizer-windows-x64'
+          $required = @(
+            'Optimizer.App.exe', 'Optimizer.App.dll', 'Optimizer.Core.dll',
+            'Optimizer.App.runtimeconfig.json', 'Optimizer.App.deps.json',
+            'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll',
+            'PresentationFramework.dll', 'PresentationCore.dll',
+            'WindowsBase.dll', 'wpfgfx_cor3.dll'
+          )
+          foreach ($name in $required) {
+            if (-not (Test-Path (Join-Path $publish $name) -PathType Leaf)) {
+              throw "Missing required published file: $name"
+            }
+          }
+          $config = Get-Content (Join-Path $publish 'Optimizer.App.runtimeconfig.json') -Raw | ConvertFrom-Json
+          $frameworks = @($config.runtimeOptions.includedFrameworks | ForEach-Object { $_.name })
+          if ('Microsoft.NETCore.App' -notin $frameworks -or 'Microsoft.WindowsDesktop.App' -notin $frameworks) {
+            throw 'The portable package must include both the .NET and Windows Desktop runtimes.'
+          }
+          @'
+          OPTIMIZER - VERSAO INICIAL DE DIAGNOSTICO
+
+          Windows 10 atualizado ou Windows 11, processador x64 (Intel/AMD).
+
+          COMO ABRIR
+          1. No arquivo ZIP, clique com o botao direito e escolha Extrair tudo.
+          2. Abra a pasta extraida.
+          3. De dois cliques em Optimizer.App.exe.
+
+          Nao precisa instalar .NET, Visual Studio ou ferramentas de programacao.
+          Mantenha o executavel junto de todos os outros arquivos da pasta.
+          Aguarde alguns segundos para as primeiras leituras de CPU e memoria.
+          Para sair, feche a janela. Nao exige administrador nem altera o PC.
+
+          Esta versao mostra hardware, CPU, memoria e processos. Ainda nao
+          aplica otimizacoes e nao mede FPS, 1% low ou input lag.
+          Os testes de contadores reais passaram no Windows antes da publicacao.
+          A janela abriu, mostrou CPU e memoria e encerrou no teste automatico.
+          A aparencia visual e o comportamento durante jogos ainda precisam de validacao.
+          '@ | Set-Content (Join-Path $publish 'LEIA-ME.txt') -Encoding utf8
+          Get-ChildItem $publish -Filter '*.pdb' -Recurse | Remove-Item
+          $archive = Join-Path $env:GITHUB_WORKSPACE 'artifacts/Optimizer-windows-x64.zip'
+          Compress-Archive -Path (Join-Path $publish '*') -DestinationPath $archive -CompressionLevel Optimal
+          $digest = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  Optimizer-windows-x64.zip" | Set-Content "$archive.sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: optimizer-release-files
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            artifacts/Optimizer-windows-x64.zip
+            artifacts/Optimizer-windows-x64.zip.sha256
+            docs/RELEASE-NOTES-0.1.0-preview.md
+
+  release:
+    name: Publish GitHub prerelease
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: optimizer-release-files
+          path: release-assets
+      - name: Create prerelease and upload files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --verify-tag \
+            --prerelease \
+            --title 'Optimizer 0.1.0-preview' \
+            --notes-file release-assets/docs/RELEASE-NOTES-0.1.0-preview.md \
+            release-assets/artifacts/Optimizer-windows-x64.zip \
+            release-assets/artifacts/Optimizer-windows-x64.zip.sha256
