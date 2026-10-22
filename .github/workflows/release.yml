@@ -253,6 +253,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
+          # Tag and branch events can target the same immutable preview. Keep
+          # the first published package and make subsequent runs idempotent.
+          if gh release view "$RELEASE_TAG" --json assets,isDraft,isPrerelease > existing-release.json; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          release = json.loads(Path('existing-release.json').read_text())
+          expected = {'Optimizer-windows-x64.zip', 'Optimizer-windows-x64.zip.sha256', 'Optimizer-preview.png'}
+          actual = {asset['name'] for asset in release['assets']}
+          if release['isDraft'] or not release['isPrerelease'] or not expected <= actual:
+              raise SystemExit('Existing release is incomplete or has different visibility; preserving it without overwriting.')
+          print('This preview is already published with all required assets; preserving the existing download.')
+          PY
+            exit 0
+          fi
           gh release create "$RELEASE_TAG" \
             --verify-tag \
             --prerelease \
